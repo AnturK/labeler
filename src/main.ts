@@ -1,16 +1,26 @@
-import * as core from '@actions/core';
-import * as github from '@actions/github';
-import * as yaml from 'js-yaml';
-import {Minimatch} from 'minimatch';
+import * as core from "@actions/core";
+import * as github from "@actions/github";
+import * as yaml from "js-yaml";
+import { Minimatch } from "minimatch";
+import { labeledStatement, thisExpression } from "@babel/types";
+
+class LabelerKey {
+  type: string;
+  label: string;
+  constructor(label: string, type: string = "filesChanged") {
+    this.type = type;
+    this.label = label;
+  }
+}
 
 async function run() {
   try {
-    const token = core.getInput('repo-token', {required: true});
-    const configPath = core.getInput('configuration-path', {required: true});
+    const token = core.getInput("repo-token", { required: true });
+    const configPath = core.getInput("configuration-path", { required: true });
 
     const prNumber = getPrNumber();
     if (!prNumber) {
-      console.log('Could not get pull request number from context, exiting');
+      console.log("Could not get pull request number from context, exiting");
       return;
     }
 
@@ -18,7 +28,8 @@ async function run() {
 
     core.debug(`fetching changed files for pr #${prNumber}`);
     const changedFiles: string[] = await getChangedFiles(client, prNumber);
-    const labelGlobs: Map<string, string[]> = await getLabelGlobs(
+    const prTitle = await getTitle(client, prNumber);
+    const labelGlobs: Map<LabelerKey, string[]> = await getLabelGlobs(
       client,
       configPath
     );
@@ -26,8 +37,14 @@ async function run() {
     const labels: string[] = [];
     for (const [label, globs] of labelGlobs.entries()) {
       core.debug(`processing ${label}`);
-      if (checkGlobs(changedFiles, globs)) {
-        labels.push(label);
+      if (label.type === "filesChanged") {
+        if (checkGlobs(changedFiles, globs)) {
+          labels.push(label.label);
+        }
+      } else if (label.type == "title") {
+        if (checkGlobs([prTitle], globs)) {
+          labels.push(label.label);
+        }
       }
     }
 
@@ -45,7 +62,6 @@ function getPrNumber(): number | undefined {
   if (!pullRequest) {
     return undefined;
   }
-
   return pullRequest.number;
 }
 
@@ -61,18 +77,33 @@ async function getChangedFiles(
 
   const changedFiles = listFilesResponse.data.map(f => f.filename);
 
-  core.debug('found changed files:');
+  core.debug("found changed files:");
   for (const file of changedFiles) {
-    core.debug('  ' + file);
+    core.debug("  " + file);
   }
 
   return changedFiles;
 }
 
+async function getTitle(
+  client: github.GitHub,
+  prNumber: number
+): Promise<string> {
+  const getResponse = await client.pulls.get({
+    owner: github.context.repo.owner,
+    repo: github.context.repo.repo,
+    pull_number: prNumber
+  });
+
+  const title = getResponse.data.title;
+
+  return title;
+}
+
 async function getLabelGlobs(
   client: github.GitHub,
   configurationPath: string
-): Promise<Map<string, string[]>> {
+): Promise<Map<LabelerKey, string[]>> {
   const configurationContent: string = await fetchContent(
     client,
     configurationPath
@@ -96,20 +127,28 @@ async function fetchContent(
     ref: github.context.sha
   });
 
-  return Buffer.from(response.data.content, 'base64').toString();
+  return Buffer.from(response.data.content, "base64").toString();
 }
 
-function getLabelGlobMapFromObject(configObject: any): Map<string, string[]> {
-  const labelGlobs: Map<string, string[]> = new Map();
+function getLabelGlobMapFromObject(
+  configObject: any
+): Map<LabelerKey, string[]> {
+  const labelGlobs: Map<LabelerKey, string[]> = new Map();
   for (const label in configObject) {
-    if (typeof configObject[label] === 'string') {
-      labelGlobs.set(label, [configObject[label]]);
-    } else if (configObject[label] instanceof Array) {
-      labelGlobs.set(label, configObject[label]);
-    } else {
-      throw Error(
-        `found unexpected type for label ${label} (should be string or array of globs)`
-      );
+    let keytype: string = "filesChanged";
+    if (typeof configObject[label]["type"] === "string") {
+      keytype = configObject[label]["type"];
+    }
+    for (const pattern in configObject[label]["patterns"]) {
+      if (typeof configObject[label]["patterns"] === "string") {
+        labelGlobs.set(new LabelerKey(label, keytype), [configObject[label]]);
+      } else if (configObject[label]["patterns"] instanceof Array) {
+        labelGlobs.set(new LabelerKey(label, keytype), configObject[label]);
+      } else {
+        throw Error(
+          `found unexpected type for label patterns ${label} (should be string or array of globs)`
+        );
+      }
     }
   }
 
