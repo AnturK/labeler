@@ -139,16 +139,14 @@ function getLabelGlobMapFromObject(
     if (typeof configObject[label]["type"] === "string") {
       keytype = configObject[label]["type"];
     }
-    for (const pattern in configObject[label]["patterns"]) {
-      if (typeof configObject[label]["patterns"] === "string") {
-        labelGlobs.set(new LabelerKey(label, keytype), [configObject[label]]);
-      } else if (configObject[label]["patterns"] instanceof Array) {
-        labelGlobs.set(new LabelerKey(label, keytype), configObject[label]);
-      } else {
-        throw Error(
-          `found unexpected type for label patterns ${label} (should be string or array of globs)`
-        );
-      }
+    if (typeof configObject[label]["patterns"] === "string") {
+      labelGlobs.set(new LabelerKey(label, keytype), [configObject[label]["patterns"]]);
+    } else if (configObject[label]["patterns"] instanceof Array) {
+      labelGlobs.set(new LabelerKey(label, keytype), configObject[label]["patterns"]);
+    } else {
+      throw Error(
+        `found unexpected type for label patterns ${label} (should be string or array of globs)`
+      );
     }
   }
 
