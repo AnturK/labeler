@@ -15,14 +15,17 @@ class LabelerKey {
   type: LabelType;
   label: string;
   removable: boolean = false;
+  opened_only: boolean = false;
   constructor(
     label: string,
     type: LabelType = LabelType.filesChanged,
-    removable: boolean = false
+    removable: boolean = false,
+    opened_only: boolean = false
   ) {
     this.type = type;
     this.label = label;
     this.removable = removable;
+    this.opened_only = opened_only;
   }
 }
 
@@ -36,6 +39,8 @@ async function run() {
       console.log("Could not get pull request number from context, exiting");
       return;
     }
+
+    const action = github.context.payload.action;
 
     const client = new github.GitHub(token);
 
@@ -53,6 +58,9 @@ async function run() {
     const labels_to_add: string[] = [];
     const labels_to_remove: string[] = [];
     for (const [label, globs] of labelGlobs.entries()) {
+      if (label.opened_only && action !== "opened") {
+        continue;
+      }
       core.debug(`processing ${label}`);
       switch (label.type) {
         case LabelType.filesChanged:
@@ -184,15 +192,26 @@ function getLabelGlobMapFromObject(
     if (typeof configObject[label]["removable"] === "boolean") {
       removable = configObject[label]["removable"];
     }
+    let opened_only: boolean = false;
+    if (typeof configObject[label]["opened_only"] === "boolean") {
+      opened_only = configObject[label]["opened_only"];
+    }
     if (typeof configObject[label]["patterns"] === "string") {
-      labelGlobs.set(new LabelerKey(label, keytype, removable), [
+      labelGlobs.set(new LabelerKey(label, keytype, removable, opened_only), [
         configObject[label]["patterns"]
       ]);
     } else if (configObject[label]["patterns"] instanceof Array) {
       labelGlobs.set(
-        new LabelerKey(label, keytype, removable),
+        new LabelerKey(label, keytype, removable, opened_only),
         configObject[label]["patterns"]
       );
+    } else if (
+      keytype == LabelType.alwaysRemove ||
+      keytype == LabelType.mergeState
+    ) {
+      labelGlobs.set(new LabelerKey(label, keytype, removable, opened_only), [
+        "not applicable"
+      ]);
     } else {
       throw Error(
         `found unexpected type for label patterns ${label} (should be string or array of globs)`
