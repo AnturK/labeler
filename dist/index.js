@@ -12318,9 +12318,11 @@ const github = __importStar(__webpack_require__(82));
 const yaml = __importStar(__webpack_require__(567));
 const minimatch_1 = __webpack_require__(888);
 class LabelerKey {
-    constructor(label, type = "filesChanged") {
+    constructor(label, type = "filesChanged" /* filesChanged */, removable = false) {
+        this.removable = false;
         this.type = type;
         this.label = label;
+        this.removable = removable;
     }
 }
 function run() {
@@ -12336,24 +12338,42 @@ function run() {
             const client = new github.GitHub(token);
             core.debug(`fetching changed files for pr #${prNumber}`);
             const changedFiles = yield getChangedFiles(client, prNumber);
-            const prTitle = yield getTitle(client, prNumber);
+            const [prTitle, current_labels, mergeable] = yield getPrInfo(client, prNumber);
             const labelGlobs = yield getLabelGlobs(client, configPath);
-            const labels = [];
+            const labels_to_add = [];
+            const labels_to_remove = [];
             for (const [label, globs] of labelGlobs.entries()) {
                 core.debug(`processing ${label}`);
-                if (label.type === "filesChanged") {
-                    if (checkGlobs(changedFiles, globs)) {
-                        labels.push(label.label);
-                    }
-                }
-                else if (label.type == "title") {
-                    if (checkGlobs([prTitle], globs)) {
-                        labels.push(label.label);
-                    }
+                switch (label.type) {
+                    case "filesChanged" /* filesChanged */:
+                        if (checkGlobs(changedFiles, globs)) {
+                            labels_to_add.push(label.label);
+                        }
+                        else if (label.removable) {
+                            labels_to_remove.push(label.label);
+                        }
+                        break;
+                    case "alwaysRemove" /* alwaysRemove */:
+                        labels_to_remove.push(label.label);
+                        break;
+                    case "mergeState" /* mergeState */:
+                        if (!mergeable)
+                            labels_to_add.push(label.label);
+                        else if (label.removable)
+                            labels_to_remove.push(label.label);
+                        break;
+                    case "title" /* title */:
+                        if (checkGlobs([prTitle], globs)) {
+                            labels_to_add.push(label.label);
+                        }
+                        else if (label.removable) {
+                            labels_to_remove.push(label.label);
+                        }
+                        break;
                 }
             }
-            if (labels.length > 0) {
-                yield addLabels(client, prNumber, labels);
+            if (labels_to_add.length > 0 || labels_to_remove.length > 0) {
+                yield updateLabels(client, prNumber, current_labels, labels_to_add, labels_to_remove);
             }
         }
         catch (error) {
@@ -12384,7 +12404,7 @@ function getChangedFiles(client, prNumber) {
         return changedFiles;
     });
 }
-function getTitle(client, prNumber) {
+function getPrInfo(client, prNumber) {
     return __awaiter(this, void 0, void 0, function* () {
         const getResponse = yield client.pulls.get({
             owner: github.context.repo.owner,
@@ -12392,7 +12412,9 @@ function getTitle(client, prNumber) {
             pull_number: prNumber
         });
         const title = getResponse.data.title;
-        return title;
+        const labels = getResponse.data.labels.map(p => { return p.name; });
+        const mergeable = getResponse.data.mergeable;
+        return [title, labels, mergeable];
     });
 }
 function getLabelGlobs(client, configurationPath) {
@@ -12418,15 +12440,21 @@ function fetchContent(client, repoPath) {
 function getLabelGlobMapFromObject(configObject) {
     const labelGlobs = new Map();
     for (const label in configObject) {
-        let keytype = "filesChanged";
+        let keytype = "filesChanged" /* filesChanged */;
         if (typeof configObject[label]["type"] === "string") {
             keytype = configObject[label]["type"];
         }
+        let removable = false;
+        if (typeof configObject[label]["removable"] === "boolean") {
+            removable = configObject[label]["removable"];
+        }
         if (typeof configObject[label]["patterns"] === "string") {
-            labelGlobs.set(new LabelerKey(label, keytype), [configObject[label]["patterns"]]);
+            labelGlobs.set(new LabelerKey(label, keytype, removable), [
+                configObject[label]["patterns"]
+            ]);
         }
         else if (configObject[label]["patterns"] instanceof Array) {
-            labelGlobs.set(new LabelerKey(label, keytype), configObject[label]["patterns"]);
+            labelGlobs.set(new LabelerKey(label, keytype, removable), configObject[label]["patterns"]);
         }
         else {
             throw Error(`found unexpected type for label patterns ${label} (should be string or array of globs)`);
@@ -12448,13 +12476,14 @@ function checkGlobs(changedFiles, globs) {
     }
     return false;
 }
-function addLabels(client, prNumber, labels) {
+function updateLabels(client, prNumber, current_labels, labels_to_add, labels_to_remove) {
     return __awaiter(this, void 0, void 0, function* () {
-        yield client.issues.addLabels({
+        const resulting_labels = [...new Set([...current_labels, ...labels_to_add])].filter(p => { return !labels_to_remove.includes(p); });
+        yield client.issues.replaceLabels({
             owner: github.context.repo.owner,
             repo: github.context.repo.repo,
             issue_number: prNumber,
-            labels: labels
+            labels: resulting_labels
         });
     });
 }

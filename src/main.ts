@@ -4,12 +4,25 @@ import * as yaml from "js-yaml";
 import { Minimatch } from "minimatch";
 import { labeledStatement, thisExpression } from "@babel/types";
 
+const enum LabelType {
+  filesChanged = "filesChanged", //Apply the label if files changed matches the pattern
+  title = "title", //Apply the label if the pr title matches the pattern
+  mergeState = "mergeState", //Apply if the pr is in umergable state
+  alwaysRemove = "alwaysRemove" //Always remove this label on update
+}
+
 class LabelerKey {
-  type: string;
+  type: LabelType;
   label: string;
-  constructor(label: string, type: string = "filesChanged") {
+  removable: boolean = false;
+  constructor(
+    label: string,
+    type: LabelType = LabelType.filesChanged,
+    removable: boolean = false
+  ) {
     this.type = type;
     this.label = label;
+    this.removable = removable;
   }
 }
 
@@ -28,28 +41,52 @@ async function run() {
 
     core.debug(`fetching changed files for pr #${prNumber}`);
     const changedFiles: string[] = await getChangedFiles(client, prNumber);
-    const prTitle = await getTitle(client, prNumber);
+    const [prTitle, current_labels, mergeable] = await getPrInfo(
+      client,
+      prNumber
+    );
     const labelGlobs: Map<LabelerKey, string[]> = await getLabelGlobs(
       client,
       configPath
     );
 
-    const labels: string[] = [];
+    const labels_to_add: string[] = [];
+    const labels_to_remove: string[] = [];
     for (const [label, globs] of labelGlobs.entries()) {
       core.debug(`processing ${label}`);
-      if (label.type === "filesChanged") {
-        if (checkGlobs(changedFiles, globs)) {
-          labels.push(label.label);
-        }
-      } else if (label.type == "title") {
-        if (checkGlobs([prTitle], globs)) {
-          labels.push(label.label);
-        }
+      switch (label.type) {
+        case LabelType.filesChanged:
+          if (checkGlobs(changedFiles, globs)) {
+            labels_to_add.push(label.label);
+          } else if (label.removable) {
+            labels_to_remove.push(label.label);
+          }
+          break;
+        case LabelType.alwaysRemove:
+          labels_to_remove.push(label.label);
+          break;
+        case LabelType.mergeState:
+          if (!mergeable) labels_to_add.push(label.label);
+          else if (label.removable) labels_to_remove.push(label.label);
+          break;
+        case LabelType.title:
+          if (checkGlobs([prTitle], globs)) {
+            labels_to_add.push(label.label);
+          } else if (label.removable) {
+            labels_to_remove.push(label.label);
+          }
+          break;
       }
     }
 
-    if (labels.length > 0) {
-      await addLabels(client, prNumber, labels);
+    if (labels_to_add.length > 0 || labels_to_remove.length > 0) {
+      await updateLabels(
+        client,
+        prNumber,
+        current_labels,
+        labels_to_add,
+        labels_to_remove
+      );
     }
   } catch (error) {
     core.error(error);
@@ -85,10 +122,10 @@ async function getChangedFiles(
   return changedFiles;
 }
 
-async function getTitle(
+async function getPrInfo(
   client: github.GitHub,
   prNumber: number
-): Promise<string> {
+): Promise<[string, string[], boolean]> {
   const getResponse = await client.pulls.get({
     owner: github.context.repo.owner,
     repo: github.context.repo.repo,
@@ -96,8 +133,12 @@ async function getTitle(
   });
 
   const title = getResponse.data.title;
+  const labels = getResponse.data.labels.map(p => {
+    return p.name;
+  });
+  const mergeable = getResponse.data.mergeable;
 
-  return title;
+  return [title, labels, mergeable];
 }
 
 async function getLabelGlobs(
@@ -135,17 +176,21 @@ function getLabelGlobMapFromObject(
 ): Map<LabelerKey, string[]> {
   const labelGlobs: Map<LabelerKey, string[]> = new Map();
   for (const label in configObject) {
-    let keytype: string = "filesChanged";
+    let keytype: LabelType = LabelType.filesChanged;
     if (typeof configObject[label]["type"] === "string") {
       keytype = configObject[label]["type"];
     }
+    let removable: boolean = false;
+    if (typeof configObject[label]["removable"] === "boolean") {
+      removable = configObject[label]["removable"];
+    }
     if (typeof configObject[label]["patterns"] === "string") {
-      labelGlobs.set(new LabelerKey(label, keytype), [
+      labelGlobs.set(new LabelerKey(label, keytype, removable), [
         configObject[label]["patterns"]
       ]);
     } else if (configObject[label]["patterns"] instanceof Array) {
       labelGlobs.set(
-        new LabelerKey(label, keytype),
+        new LabelerKey(label, keytype, removable),
         configObject[label]["patterns"]
       );
     } else {
@@ -173,16 +218,24 @@ function checkGlobs(changedFiles: string[], globs: string[]): boolean {
   return false;
 }
 
-async function addLabels(
+async function updateLabels(
   client: github.GitHub,
   prNumber: number,
-  labels: string[]
+  current_labels: string[],
+  labels_to_add: string[],
+  labels_to_remove: string[]
 ) {
-  await client.issues.addLabels({
+  const resulting_labels = [
+    ...new Set([...current_labels, ...labels_to_add])
+  ].filter(p => {
+    return !labels_to_remove.includes(p);
+  });
+
+  await client.issues.replaceLabels({
     owner: github.context.repo.owner,
     repo: github.context.repo.repo,
     issue_number: prNumber,
-    labels: labels
+    labels: resulting_labels
   });
 }
 
