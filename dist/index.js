@@ -12346,7 +12346,7 @@ function run() {
             const labels_to_add = [];
             const labels_to_remove = [];
             for (const [label, globs] of labelGlobs.entries()) {
-                if (label.opened_only && action !== 'opened') {
+                if (label.opened_only && action !== "opened") {
                     continue;
                 }
                 core.debug(`processing ${label}`);
@@ -12369,7 +12369,7 @@ function run() {
                             labels_to_remove.push(label.label);
                         break;
                     case "title" /* title */:
-                        if (checkGlobs([prTitle], globs)) {
+                        if (checkGlobs([prTitle.toLowerCase()], globs)) {
                             labels_to_add.push(label.label);
                         }
                         else if (label.removable) {
@@ -12468,8 +12468,11 @@ function getLabelGlobMapFromObject(configObject) {
         else if (configObject[label]["patterns"] instanceof Array) {
             labelGlobs.set(new LabelerKey(label, keytype, removable, opened_only), configObject[label]["patterns"]);
         }
-        else if (keytype == "alwaysRemove" /* alwaysRemove */ || keytype == "mergeState" /* mergeState */) {
-            labelGlobs.set(new LabelerKey(label, keytype, removable, opened_only), ["not applicable"]);
+        else if (keytype == "alwaysRemove" /* alwaysRemove */ ||
+            keytype == "mergeState" /* mergeState */) {
+            labelGlobs.set(new LabelerKey(label, keytype, removable, opened_only), [
+                "not applicable"
+            ]);
         }
         else {
             throw Error(`found unexpected type for label patterns ${label} (should be string or array of globs)`);

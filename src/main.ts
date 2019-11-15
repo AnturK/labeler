@@ -78,7 +78,7 @@ async function run() {
           else if (label.removable) labels_to_remove.push(label.label);
           break;
         case LabelType.title:
-          if (checkGlobs([prTitle], globs)) {
+          if (checkGlobs([prTitle.toLowerCase()], globs)) {
             labels_to_add.push(label.label);
           } else if (label.removable) {
             labels_to_remove.push(label.label);
