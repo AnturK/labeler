@@ -3,7 +3,7 @@
   "version": "2.0.0",
   "private": true,
   "description": "Labels pull requests by files altered",
-  "main": "lib/main.js",
+  "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "format": "prettier --write **/*.ts",
@@ -44,8 +44,7 @@
   "husky": {
     "skipCI": true,
     "hooks": {
-      "pre-commit": "npm run build && npm run format",
-      "post-commit": "npm prune --production && git add node_modules/* && git commit -m \"Husky commit correct node modules\""
+      "pre-commit": "npm run format"
     }
   }
 }
